@@ -1,0 +1,15 @@
+# Build artifacts
+*.exe
+*.o
+*.obj
+
+# Temporary files
+/tmp/
+.DS_Store
+.vscode/
+.gemini/
+.agent/
+.agents/
+knowledge/
+brain/
+*.log
