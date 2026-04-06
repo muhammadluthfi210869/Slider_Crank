@@ -2,118 +2,185 @@
 #include <math.h>
 #include <stdio.h>
 
-// Ukuran layar & parameter mekanisme
-#define L_LAYAR 1200
+// Ukuran Layar
+#define L_LAYAR 1280
 #define T_LAYAR 800
-#define JARI_JARI 100.0f
-#define PANJANG_ROD 320.0f
-#define HIST_SIZE 240
+#define HIST_SIZE 250
 
-// Fungsi garis putus-putus untuk lintasan
-void GambarGarisPutus(Vector2 awal, Vector2 akhir, float panjang, Color warna) {
-    float dx = akhir.x - awal.x, dy = akhir.y - awal.y;
-    float jarak = sqrtf(dx*dx + dy*dy);
-    int jumlah = (int)(jarak / (panjang * 2));
-    for (int i = 0; i < jumlah; i++) {
-        float f1 = (i * 2) * panjang / jarak;
-        float f2 = (i * 2 + 1) * panjang / jarak;
-        DrawLineV((Vector2){awal.x + dx*f1, awal.y + dy*f1}, (Vector2){awal.x + dx*f2, awal.y + dy*f2}, warna);
+// Buffer Riwayat (Kalkulus)
+float riwayatX[HIST_SIZE] = { 0 };
+float riwayatV[HIST_SIZE] = { 0 };
+float riwayatA[HIST_SIZE] = { 0 };
+int idxRiwayat = 0;
+
+// Variabel Kontrol
+float R = 100.0f;
+float L_ROD = 320.0f;
+float kecepatanDasar = 2.0f;
+bool isOutline = false;
+
+// Fungsi menggambar panah vektor
+void GambarVektor(Vector2 pos, float nilai, float skala, Color warna) {
+    if (fabsf(nilai) < 0.05f) return;
+    float panjang = nilai * skala;
+    Vector2 ujung = { pos.x + panjang, pos.y };
+    DrawLineEx(pos, ujung, 3.0f, warna);
+    float arah = (nilai > 0) ? 1.0f : -1.0f;
+    DrawTriangle((Vector2){ujung.x, ujung.y - 6}, (Vector2){ujung.x, ujung.y + 6}, (Vector2){ujung.x + 8 * arah, ujung.y}, warna);
+}
+
+// Fungsi grafik kalkulus
+void GambarDashboardKalkulus(int x, int y, int w, int h, float* data, Color warna, char* label) {
+    DrawRectangle(x - 5, y - 5, w + 10, h + 10, Fade(BLACK, 0.7f));
+    DrawRectangleLines(x - 5, y - 5, w + 10, h + 10, DARKGRAY);
+    DrawText(label, x, y - 20, 15, warna);
+    DrawLine(x, y + h/2, x + w, y + h/2, DARKGRAY);
+
+    for (int i = 0; i < HIST_SIZE - 1; i++) {
+        float val1 = data[i] * (h / 2.2f);
+        float val2 = data[i + 1] * (h / 2.2f);
+        
+        // Clamping: Batasi agar tidak keluar garis kotak (h/2)
+        if (val1 > h/2) val1 = h/2; if (val1 < -h/2) val1 = -h/2;
+        if (val2 > h/2) val2 = h/2; if (val2 < -h/2) val2 = -h/2;
+
+        float y1 = (y + h/2) - val1;
+        float y2 = (y + h/2) - val2;
+        DrawLine(x + i * (w / (float)HIST_SIZE), y1, x + (i + 1) * (w / (float)HIST_SIZE), y2, warna);
     }
 }
 
 int main(void) {
-    // Setup window awal
-    InitWindow(L_LAYAR, T_LAYAR, "Simulasi Slider Crank - Mekanika Mesin");
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
+    InitWindow(L_LAYAR, T_LAYAR, "DASHBOARD INTERAKTIF: KALKULUS & FISIKA [FIXED]");
     SetTargetFPS(60);
 
     float sudut = 0.0f;
-    float kec_dasar = 2.5f;
-    float riwayatX[HIST_SIZE] = { 0 };
-    int idxRiwayat = 0;
-
-    // Titik pusat kruk as
-    Vector2 pusatA = { L_LAYAR / 4.0f + 60, T_LAYAR / 2.0f };
+    float x_sebelum = 0.0f;
+    float v_sebelum = 0.0f;
+    Vector2 pusatA = { L_LAYAR / 4.0f, T_LAYAR / 2.0f };
 
     while (!WindowShouldClose()) {
-        // Kontrol kecepatan pakai panah keyboard
-        if (IsKeyDown(KEY_UP)) kec_dasar += 0.05f;
-        if (IsKeyDown(KEY_DOWN)) kec_dasar -= 0.05f;
-        if (kec_dasar < 0) kec_dasar = 0;
+        bool variabelBerubah = false;
+        Vector2 mPos = GetMousePosition();
+        
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            if (CheckCollisionPointRec(mPos, (Rectangle){30, 110, 200, 20})) {
+                kecepatanDasar = (mPos.x - 30) / 20.0f; 
+                if (kecepatanDasar < 0) kecepatanDasar = 0;
+            }
+            if (CheckCollisionPointRec(mPos, (Rectangle){30, 180, 200, 20})) {
+                R = (mPos.x - 30) * 1.5f; variabelBerubah = true;
+                if (R < 20.0f) R = 20.0f; if (R > 180.0f) R = 180.0f;
+            }
+            if (CheckCollisionPointRec(mPos, (Rectangle){30, 250, 200, 20})) {
+                L_ROD = (mPos.x - 30) * 4.0f; variabelBerubah = true;
+                if (L_ROD < R + 20.0f) L_ROD = R + 20.0f;
+            }
+        }
+        if (IsKeyPressed(KEY_O)) isOutline = !isOutline;
 
-        // Simulasi beban mesin (kecepatan berubah sedikit saat kompresi)
-        float w = kec_dasar * (1.0f + 0.15f * sinf(sudut - PI/4.0f));
-        sudut += w * GetFrameTime();
+        // Update Mekanik
+        sudut += kecepatanDasar * GetFrameTime();
         if (sudut > 2*PI) sudut -= 2*PI;
 
-        // Hitung posisi kruk pin (Titik B)
-        Vector2 titikB = { pusatA.x + JARI_JARI * cosf(sudut), pusatA.y + JARI_JARI * sinf(sudut) };
-
-        // Hitung posisi piston (Titik C) pakai Pythagoras
+        Vector2 titikB = { pusatA.x + R * cosf(sudut), pusatA.y + R * sinf(sudut) };
         float dy = titikB.y - pusatA.y;
-        float L_datar = sqrtf(PANJANG_ROD * PANJANG_ROD - (dy * dy));
-        Vector2 titikC = { titikB.x + L_datar, pusatA.y };
+        float x_pos = titikB.x + sqrtf(L_ROD * L_ROD - (dy * dy));
+        Vector2 titikC = { x_pos, pusatA.y };
 
-        // Simpan data untuk grafik x(t)
-        riwayatX[idxRiwayat] = (titikC.x - (pusatA.x + PANJANG_ROD)) / JARI_JARI;
-        idxRiwayat = (idxRiwayat + 1) % HIST_SIZE;
+        // Kalkulus Numerik dengan Proteksi Lonjakan (Spike Protection)
+        float dt = GetFrameTime();
+        if (dt > 0) {
+            float v_now = (x_pos - x_sebelum) / dt;
+            float a_now = (v_now - v_sebelum) / dt;
 
+            // Jika slider digeser, kita reset data agar tidak ada grafik "meledak"
+            if (variabelBerubah) {
+                v_now = 0; a_now = 0;
+            }
+
+            for(int i=0; i<HIST_SIZE-1; i++) {
+                riwayatX[i] = riwayatX[i+1];
+                riwayatV[i] = riwayatV[i+1];
+                riwayatA[i] = riwayatA[i+1];
+            }
+            riwayatX[HIST_SIZE-1] = (x_pos - (pusatA.x + L_ROD)) / (R + 1.0f);
+            riwayatV[HIST_SIZE-1] = v_now / 400.0f; 
+            riwayatA[HIST_SIZE-1] = a_now / 5000.0f;
+
+            x_sebelum = x_pos;
+            v_sebelum = v_now;
+        }
+
+        // --- RENDERING ---
         BeginDrawing();
-        ClearBackground((Color){ 10, 10, 12, 255 }); 
+        ClearBackground((Color){ 10, 10, 12, 255 });
 
-        // Gambar grid tipis
+        // Background Grid
         for(int x=0; x<L_LAYAR; x+=50) DrawLine(x, 0, x, T_LAYAR, (Color){ 20, 20, 25, 255 });
         for(int y=0; y<T_LAYAR; y+=50) DrawLine(0, y, L_LAYAR, y, (Color){ 20, 20, 25, 255 });
 
-        // Komponen Luar (Silinder & Sirip)
-        float sX = pusatA.x + JARI_JARI + 40;
-        for(int f=0; f<10; f++) DrawRectangle(sX + f*32, pusatA.y - 65, 4, 130, (Color){40, 40, 45, 255});
-        DrawRectangle(sX, pusatA.y - 60, 340, 120, (Color){18, 18, 22, 255});
-        DrawLineEx((Vector2){sX, pusatA.y - 60}, (Vector2){sX + 340, pusatA.y - 60}, 2, DARKGRAY);
-        DrawLineEx((Vector2){sX, pusatA.y + 60}, (Vector2){sX + 340, pusatA.y + 60}, 2, DARKGRAY);
+        // 1. SILINDER & ENGINE BLOCK
+        float sX = pusatA.x + R + 20;
+        DrawRectangle(sX, pusatA.y - 70, 450, 140, (Color){18, 18, 22, 255});
+        if (!isOutline) {
+            for(int f=0; f<13; f++) DrawRectangle(sX + 10 + f*34, pusatA.y - 75, 4, 150, (Color){40, 40, 45, 255});
+        }
 
-        // Bagian Kruk As (Crankshaft)
-        Vector2 bobotPos = { pusatA.x - 60 * cosf(sudut), pusatA.y - 60 * sinf(sudut) };
-        DrawLineEx(pusatA, bobotPos, 20, (Color){60, 60, 70, 255});
-        DrawCircleV(bobotPos, 30, (Color){50, 50, 60, 255});
-        DrawLineEx(pusatA, titikB, 12, SKYBLUE);
-        DrawCircleV(pusatA, 30, (Color){40, 40, 45, 255});
-        DrawCircleV(titikB, 8, BLUE);
+        // 2. MEKANIK UTAMA
+        if (isOutline) {
+            DrawCircleLines(pusatA.x, pusatA.y, R, SKYBLUE);
+            DrawLineEx(pusatA, titikB, 2.0f, SKYBLUE);
+            DrawLineEx(titikB, titikC, 2.0f, GRAY);
+            DrawRectangleLines(titikC.x - 60, titikC.y - 45, 120, 90, WHITE);
+        } else {
+            // Crank & Counterweight
+            Vector2 bw = { pusatA.x - (R*0.7f) * cosf(sudut), pusatA.y - (R*0.7f) * sinf(sudut) };
+            DrawLineEx(pusatA, bw, 20, (Color){60, 60, 70, 255});
+            DrawCircleV(bw, 25, (Color){50, 50, 60, 255});
+            DrawLineEx(pusatA, titikB, 12, SKYBLUE);
+            DrawCircleV(pusatA, 32, (Color){40, 40, 45, 255});
+            // Connecting Rod
+            DrawLineEx(titikB, titikC, 8, DARKGRAY);
+            DrawCircleV(titikB, 10, BLUE);
+            // Piston
+            DrawRectangleGradientH(titikC.x - 60, titikC.y - 45, 120, 90, GRAY, DARKGRAY);
+            for(int r=0; r<3; r++) DrawRectangle(titikC.x - 50 + r*12, titikC.y - 40, 4, 80, BLACK);
+            // Ignition Flash
+            if (fabsf(sudut) < 0.2f || sudut > 2*PI - 0.2f) 
+                DrawCircleGradient(sX + 440, pusatA.y, 70, YELLOW, Fade(GOLD, 0.0f));
+        }
 
-        // Batang Piston (Connecting Rod)
-        DrawLineEx(titikB, titikC, 8, DARKGRAY);
+        // 3. VEKTOR GAYA (FISIKA)
+        GambarVektor(titikC, riwayatA[HIST_SIZE-1], 15.0f, RED);
+        if (!isOutline) DrawText("Vektor Inersia (F=ma)", titikC.x - 60, titikC.y - 65, 12, RED);
 
-        // Piston & Efek Pembakaran
-        Rectangle pistonBox = { titikC.x - 60, titikC.y - 45, 120, 90 };
-        DrawRectangleRec(pistonBox, (Color){110, 110, 120, 255});
-        for(int r=0; r<3; r++) DrawRectangle(pistonBox.x + 10 + r*12, pistonBox.y + 5, 4, 80, BLACK);
+        // 4. GRAFIK DASHBOARD (KALKULUS)
+        GambarDashboardKalkulus(960, 80,  280, 120, riwayatX, SKYBLUE, "1. Posisi [x]");
+        GambarDashboardKalkulus(960, 260, 280, 120, riwayatV, LIME,    "2. Kecepatan [v = dx/dt]");
+        GambarDashboardKalkulus(960, 440, 280, 120, riwayatA, RED,     "3. Percepatan [a = dv/dt]");
+
+        // 5. PANEL PANEL KONTROL
+        DrawRectangle(20, 20, 260, 360, Fade(BLACK, 0.7f));
+        DrawRectangleLines(20, 20, 260, 360, DARKGRAY);
+        DrawText("DASHBOARD KONTROL", 40, 40, 18, GOLD);
         
-        // Efek Flash Busi (Ignition)
-        if (fabsf(sudut) < 0.25f || fabsf(sudut) > PI*1.95f) {
-            DrawCircleGradient(sX + 320, pusatA.y, 50, YELLOW, Fade(ORANGE, 0.0f));
-            DrawText("IGNITION!", sX + 240, pusatA.y - 80, 20, GOLD);
-        }
-        DrawCircle(sX + 335, pusatA.y, 8, RED); // Lokasi busi
+        char buf[128];
+        sprintf(buf, "Kecepatan RPM: %.0f", kecepatanDasar * 9.55f); 
+        DrawText(buf, 40, 85, 16, RAYWHITE);
+        DrawRectangle(30, 110, 200, 8, DARKGRAY); DrawCircle(30 + kecepatanDasar*20, 114, 8, GOLD);
 
-        // Katup (Valves) sederhana
-        float vY = sinf(sudut) * 15.0f;
-        DrawRectangle(sX + 300, pusatA.y - 65 - (vY > 0 ? vY : 0), 15, 10, LIME); 
-        DrawRectangle(sX + 300, pusatA.y + 55 + (vY < 0 ? -vY : 0), 15, 10, MAROON);
+        sprintf(buf, "Radius Crank (r): %.1f", R); 
+        DrawText(buf, 40, 155, 16, SKYBLUE);
+        DrawRectangle(30, 180, 200, 8, DARKGRAY); DrawCircle(30 + (R/1.5f), 184, 8, SKYBLUE);
 
-        // Grafik x(t) di pojok
-        DrawRectangle(840, 610, 320, 160, Fade(BLACK, 0.8f));
-        DrawRectangleLines(840, 610, 320, 160, DARKGRAY);
-        DrawText("Grafik Posisi Piston x(t)", 850, 585, 16, SKYBLUE);
-        for (int i = 0; i < HIST_SIZE - 1; i++) {
-            int a = (idxRiwayat + i) % HIST_SIZE, b = (idxRiwayat + i + 1) % HIST_SIZE;
-            DrawLine(850 + i * (300.0f/HIST_SIZE), 690 - riwayatX[a]*60, 
-                     850 + (i+1) * (300.0f/HIST_SIZE), 690 - riwayatX[b]*60, SKYBLUE);
-        }
+        sprintf(buf, "Panjang Rod (L): %.1f", L_ROD); 
+        DrawText(buf, 40, 225, 16, GRAY);
+        DrawRectangle(30, 250, 200, 8, DARKGRAY); DrawCircle(30 + (L_ROD/4.0f), 254, 8, RAYWHITE);
 
-        // Panel Info (Tugas Kuliah Style)
-        DrawRectangle(30, 30, 350, 100, Fade(BLACK, 0.5f));
-        DrawText(TextFormat("Sudut Theta: %.1f deg", sudut * RAD2DEG), 45, 45, 18, RAYWHITE);
-        DrawText(TextFormat("Kec. Sudut: %.2f rad/s", w), 45, 70, 18, SKYBLUE);
-        DrawText("Gunakan Panah Atas/Bawah", 45, 135, 14, GRAY);
+        DrawText("[O] Toggle Outline Mode", 40, 310, 15, isOutline ? GREEN : LIGHTGRAY);
+        DrawText("Geser slider untuk kontrol", 40, 335, 14, DARKGRAY);
 
         EndDrawing();
     }
